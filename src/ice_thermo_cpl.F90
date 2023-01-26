@@ -1,4 +1,4 @@
-#if defined (__oasis) || defined (__ifsinterface)
+#if defined (__coupled) || defined (__ifsinterface)
 subroutine thermodynamics(ice, partit, mesh)
 
   !===================================================================
@@ -69,7 +69,7 @@ subroutine thermodynamics(ice, partit, mesh)
 #if defined (__oifs) || defined (__ifsinterface)
   real(kind=WP), dimension(:)  , pointer :: ice_temp, ice_alb, enthalpyoffuse
 #endif
-#if defined (__oasis) || defined (__ifsinterface)
+#if defined (__coupled) || defined (__ifsinterface)
   real(kind=WP), dimension(:)  , pointer ::  oce_heat_flux, ice_heat_flux 
 #endif 
   real(kind=WP)                , pointer :: rhoice, rhosno, rhowat, Sice, cl, cc, cpice, consn, con 
@@ -99,7 +99,7 @@ subroutine thermodynamics(ice, partit, mesh)
   ice_alb       => ice%atmcoupl%ice_alb(:)
   enthalpyoffuse=> ice%atmcoupl%enthalpyoffuse(:)
 #endif 
-#if defined (__oasis) || defined (__ifsinterface)
+#if defined (__coupled) || defined (__ifsinterface)
   oce_heat_flux => ice%atmcoupl%oce_flx_h(:)
   ice_heat_flux => ice%atmcoupl%ice_flx_h(:)
 #endif

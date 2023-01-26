@@ -94,7 +94,7 @@ real(kind=WP), allocatable, dimension(:)    :: coriolis_node, coriolis
 !___Elevation stiffness matrix__________________________________________________
 type(sparse_matrix)                         :: ssh_stiff
 
-!#if defined (__oasis)
+!#if defined (__coupled)
 real(kind=WP), allocatable, dimension(:)    :: lump2d_south, lump2d_north  
 integer,       allocatable, dimension(:)    :: ind_south, ind_north    
 !#endif
