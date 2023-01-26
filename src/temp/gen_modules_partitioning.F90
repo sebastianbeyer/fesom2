@@ -41,14 +41,11 @@ subroutine par_init(partit)    ! initializes MPI
   integer                               :: provided_mpi_thread_support_level
   character(:), allocatable             :: provided_mpi_thread_support_level_name
 
-#ifndef __oasis
-  call MPI_Comm_Size(MPI_COMM_WORLD,partit%npes,i)
-  call MPI_Comm_Rank(MPI_COMM_WORLD,partit%mype,i)
+#ifndef __coupled
   partit%MPI_COMM_FESOM=MPI_COMM_WORLD
-#else
-  call MPI_Comm_Size(MPI_COMM_FESOM,partit%npes,i)
-  call MPI_Comm_Rank(MPI_COMM_FESOM,partit%mype,i)
 #endif  
+  call MPI_Comm_Size(partit%MPI_COMM_FESOM,partit%npes,i)
+  call MPI_Comm_Rank(partit%MPI_COMM_FESOM,partit%mype,i)
 
   if(partit%mype==0) then
     call MPI_Query_thread(provided_mpi_thread_support_level, i)
@@ -80,7 +77,7 @@ USE MOD_PARTIT
   type(t_partit), intent(inout), target :: partit
   integer,optional                      :: abort
 
-#ifndef __oasis
+#ifndef __coupled
   if (present(abort)) then
      if (partit%mype==0) write(*,*) 'Run finished unexpectedly!'
      call MPI_ABORT(partit%MPI_COMM_FESOM, 1 )
@@ -93,7 +90,11 @@ USE MOD_PARTIT
      if (partit%mype==0) print *, 'FESOM calls MPI_Barrier before calling prism_terminate'
      call  MPI_Barrier(MPI_COMM_WORLD, partit%MPIerr)
   end if
+#ifdef __oasis
   call prism_terminate_proto(MPIerr)
+#elif __yac
+  call cpl_yac_finalize()
+#endif
   if (partit%mype==0) print *, 'FESOM calls MPI_Barrier before calling MPI_Finalize'
   call  MPI_Barrier(MPI_COMM_WORLD, partit%MPIerr)
   

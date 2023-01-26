@@ -96,6 +96,9 @@ subroutine update_atm_forcing(istep, ice, tracers, dynamics, partit, mesh)
 #if defined (__oasis)
   use cpl_driver
 #endif
+#if defined (__yac)
+  use cpl_yac_driver
+#endif
   use gen_bulk
   use force_flux_consv_interface
 
@@ -222,7 +225,11 @@ subroutine update_atm_forcing(istep, ice, tracers, dynamics, partit, mesh)
             print *, 'not installed yet or error in cpl_oasis3mct_send', mype
 #endif
          endif
+#if defined(__oasis)
          call cpl_oasis3mct_send(i, exchange, action, partit)
+#elif defined(__yac)
+         call cpl_yac_send(i, exchange, action, partit)
+#endif
       enddo
 #ifdef VERBOSE
       do i=1, nsend 
@@ -232,7 +239,12 @@ subroutine update_atm_forcing(istep, ice, tracers, dynamics, partit, mesh)
       mask=1.
       do i=1,nrecv
          exchange =0.0
+#if defined (__oasis)
          call cpl_oasis3mct_recv (i, exchange, action, partit)
+#endif
+#if defined (__yac)
+         call cpl_yac_recv (i, exchange, action, partit)
+#endif
 	 !if (.not. action) cycle
 	 !Do not apply a correction at first time step!
     if (i==1 .and. action .and. istep/=1) call net_rec_from_atm(action, partit)

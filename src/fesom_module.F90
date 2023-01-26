@@ -38,7 +38,7 @@ module fesom_main_storage_module
   use cpl_driver
 #endif
 #if defined (__yac)
-use cpl_yac_driver, only: cpl_yac_init, cpl_yac_finalize
+use cpl_yac_driver
 #endif
 
   implicit none
@@ -200,6 +200,11 @@ contains
 #if defined (__oasis)
         call cpl_oasis3mct_define_unstr(f%partit, f%mesh)
         if(f%mype==0)  write(*,*) 'FESOM ---->     cpl_oasis3mct_define_unstr nsend, nrecv:',nsend, nrecv
+#endif
+
+#if defined (__yac)
+        call cpl_yac_define_unstr(f%partit, f%mesh)
+        if(f%mype==0)  write(*,*) 'FESOM ---->     cpl_yac_define_unstr nsend, nrecv:',nsend, nrecv
 #endif
 
 #if defined (__icepack)
@@ -402,10 +407,6 @@ contains
     use fesom_main_storage_module
     ! EO parameters
     real(kind=real32) :: mean_rtime(15), max_rtime(15), min_rtime(15)
-
-#if defined (__yac)
-    call cpl_yac_finalize()
-#endif
 
     call finalize_output()
     call finalize_restart()

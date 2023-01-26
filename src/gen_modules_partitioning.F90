@@ -48,10 +48,10 @@ subroutine par_init(partit)    ! initializes MPI
   integer                               :: provided_mpi_thread_support_level
   character(:), allocatable             :: provided_mpi_thread_support_level_name
 
-#if defined __oasis || defined  __ifsinterface
+#if defined __coupled || defined  __ifsinterface
   ! use comm from coupler or ifs
 #else
-  partit%MPI_COMM_FESOM=MPI_COMM_WORLD ! use global comm if not coupled (e.g. no __oasis or __ifsinterface)
+  partit%MPI_COMM_FESOM=MPI_COMM_WORLD ! use global comm if not coupled (e.g. no __coupled or __ifsinterface)
 #endif  
   call MPI_Comm_Size(partit%MPI_COMM_FESOM,partit%npes,i)
   call MPI_Comm_Rank(partit%MPI_COMM_FESOM,partit%mype,i)
@@ -102,7 +102,7 @@ subroutine par_ex(COMM, mype, abort)       ! finalizes MPI
 
 ! For standalone runs we directly call the MPI_barrier and MPI_finalize
 !---------------------------------------------------------------
-#ifndef __oasis
+#ifndef __coupled
   if (present(abort)) then
      if (mype==0) write(*,*) 'Run finished unexpectedly!'
      call MPI_ABORT(COMM, 1 )
@@ -119,9 +119,15 @@ subroutine par_ex(COMM, mype, abort)       ! finalizes MPI
   if (present(abort)) then
     if (mype==0) write(*,*) 'Run finished unexpectedly!'
     call MPI_ABORT(COMM, 1 )
-  else
+ else
+#ifdef __oasis
     call oasis_terminate
-  endif
+#elif __yac
+    call yac_ffinalize()
+#endif
+ endif
+#elif defined(__yac)
+  call yac_ffinalize()
 #else
   !For ECHAM coupled runs we use the old OASIS nameing scheme (prism / prism_proto)
   if (.not. present(abort)) then
@@ -135,7 +141,7 @@ subroutine par_ex(COMM, mype, abort)       ! finalizes MPI
   if (mype==0) print *, 'FESOM calls MPI_Finalize'
   call MPI_Finalize(error)
 #endif ! oifs/echam
-#endif ! oasis
+#endif ! coupled
 
 ! Regardless of standalone, OpenIFS oder ECHAM coupling, if we reach to this point
 ! we should be fine shutting the whole model down
