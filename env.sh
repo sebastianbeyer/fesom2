@@ -57,6 +57,8 @@ elif [[ $LOGINHOST =~ ^[A-Za-z0-9]+\.ecmwf\.int$ ]]; then
 STRATEGY="wsecmwf"
 elif [[ $LOGINHOST =~ \.bullx$ ]]; then
 STRATEGY="atosecmwf"
+elif [[ $LOGINHOST =~ uan[0-9][0-9] ]]; then
+   STRATEGY="lumi"
 else
    echo "can not determine environment for host: "$LOGINHOST
    [ $BEING_EXECUTED = true ] && exit 1
