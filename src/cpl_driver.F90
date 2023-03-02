@@ -210,23 +210,31 @@ contains
 
     character(len=32)          :: point_name     ! name of the grid points
 
-    integer                    :: my_number_of_points
-    integer                    :: number_of_all_points
+    integer                    :: my_number_of_nodes
+    integer                    :: number_of_all_nodes
+    integer                    :: my_number_of_elements
+    integer                    :: number_of_all_elements
     integer                    :: counts_from_all_pes(partit%npes)
     integer                    :: displs_from_all_pes(partit%npes)
     integer                    :: my_displacement
 
     integer,allocatable        :: unstr_mask(:,:)
-    real(kind=WP)              :: this_x_coord          ! longitude coordinates
-    real(kind=WP)              :: this_y_coord          ! latitude coordinates
+    real(kind=WP)              :: this_nx_coord          ! longitude node coordinates
+    real(kind=WP)              :: this_ny_coord          ! latitude node coordinates
+    real(kind=WP)              :: this_ex_coord          ! longitude element coordinates
+    real(kind=WP)              :: this_ey_coord          ! latitude element coordinates
     !
     ! Corner data structure for a OASIS3-MCT Reglonlatvrt grid
     !
-    real(kind=WP), allocatable :: my_x_coords(:)     ! longitude coordinates
-    real(kind=WP), allocatable :: my_y_coords(:)     ! latitude  coordinates
+    real(kind=WP), allocatable :: my_nx_coords(:)     ! longitude node coordinates
+    real(kind=WP), allocatable :: my_ny_coords(:)     ! latitude node coordinates
+    real(kind=WP), allocatable :: my_ex_coords(:)     ! longitude element coordinates
+    real(kind=WP), allocatable :: my_ey_coords(:)     ! latitude element coordinates
 
-    real(kind=WP), allocatable :: all_x_coords(:, :)     ! longitude coordinates
-    real(kind=WP), allocatable :: all_y_coords(:, :)     ! latitude  coordinates
+    real(kind=WP), allocatable :: all_nx_coords(:, :)     ! longitude node coordinates
+    real(kind=WP), allocatable :: all_ny_coords(:, :)     ! latitude node coordinates
+    real(kind=WP), allocatable :: all_ex_coords(:, :)     ! longitude element coordinates
+    real(kind=WP), allocatable :: all_ey_coords(:, :)     ! latitude element coordinates
     real(kind=WP), allocatable :: all_area(:,:)    
 
 #include "associate_part_def.h"
@@ -265,12 +273,16 @@ contains
 ! ... Define the partition
 ! -----------------------------------------------------------------
 
-    my_number_of_points = myDim_nod2d
-    number_of_all_points = nod2d
+    my_number_of_nodes = myDim_nod2d
+    my_number_of_elements = myDim_elem2d
+    number_of_all_nodes = nod2d
+    number_of_all_elements = elem2d
     if (mype .eq. 0) then 
       print *, 'FESOM Before ALLGATHERV'
     endif
-    CALL MPI_ALLGATHER(my_number_of_points, 1, MPI_INTEGER, & 
+    CALL MPI_ALLGATHER(my_number_of_nodes, 1, MPI_INTEGER, & 
+                       counts_from_all_pes, 1, MPI_INTEGER, MPI_COMM_FESOM, ierror)
+    CALL MPI_ALLGATHER(my_number_of_elements, 1, MPI_INTEGER, & 
                        counts_from_all_pes, 1, MPI_INTEGER, MPI_COMM_FESOM, ierror)
     if (mype .eq. 0) then
       print *, 'FESOM after ALLGATHERV'
@@ -284,7 +296,8 @@ contains
 
     ig_paral(1) = 1                       ! Apple Partition
     ig_paral(2) = my_displacement         ! Global Offset
-    ig_paral(3) = my_number_of_points     ! Local Extent
+    ig_paral(3) = my_number_of_nodes      ! Local Extent
+    ig_paral(4) = my_number_of_elements   ! Local Extent
 
     if (mype .eq. 0) then
       print *, 'FESOM before def partition'
@@ -298,25 +311,39 @@ contains
        call oasis_abort(comp_id, 'cpl_oasis3mct_define_unstr', 'def_partition failed')
     endif
       
-    ALLOCATE(my_x_coords(my_number_of_points))
-    ALLOCATE(my_y_coords(my_number_of_points))
+    ALLOCATE(my_nx_coords(my_number_of_nodes))
+    ALLOCATE(my_ny_coords(my_number_of_nodes))
+    ALLOCATE(my_ex_coords(my_number_of_elements))
+    ALLOCATE(my_ey_coords(my_number_of_elements))
 
-    do i = 1, my_number_of_points
-      this_x_coord = coord_nod2D(1, i)
-      this_y_coord = coord_nod2D(2, i)
-      call r2g(my_x_coords(i), my_y_coords(i), this_x_coord, this_y_coord)
+    do i = 1, my_number_of_nodes
+      this_nx_coord = coord_nod2D(1, i)
+      this_ny_coord = coord_nod2D(2, i)
+      call r2g(my_nx_coords(i), my_ny_coords(i), this_nx_coord, this_ny_coord)
     end do   
 
-    my_x_coords=my_x_coords/rad
-    my_y_coords=my_y_coords/rad
+    do i = 1, my_number_of_elements
+      this_ex_coord = coord_elem2D(1, i)
+      this_ey_coord = coord_elem2D(2, i)
+      call r2g(my_ex_coords(i), my_ey_coords(i), this_ex_coord, this_ey_coord)
+    end do   
+
+    my_nx_coords=my_ex_coords/rad
+    my_ny_coords=my_ey_coords/rad
+    my_ex_coords=my_ex_coords/rad
+    my_ey_coords=my_ey_coords/rad
 
     if (mype .eq. localroot) then
-      ALLOCATE(all_x_coords(number_of_all_points, 1))
-      ALLOCATE(all_y_coords(number_of_all_points, 1))
-      ALLOCATE(all_area(number_of_all_points, 1))
+      ALLOCATE(all_nx_coords(number_of_all_nodes, 1))
+      ALLOCATE(all_ny_coords(number_of_all_nodes, 1))
+      ALLOCATE(all_ex_coords(number_of_all_elements, 1))
+      ALLOCATE(all_ey_coords(number_of_all_elements, 1))
+      ALLOCATE(all_area(number_of_all_nodes, 1))
     else 
-      ALLOCATE(all_x_coords(1, 1))
-      ALLOCATE(all_y_coords(1, 1))
+      ALLOCATE(all_nx_coords(1, 1))
+      ALLOCATE(all_ny_coords(1, 1))
+      ALLOCATE(all_ex_coords(1, 1))
+      ALLOCATE(all_ey_coords(1, 1))
       ALLOCATE(all_area(1, 1))
     endif
 
@@ -326,21 +353,25 @@ contains
     enddo  
 
     if (mype .eq. 0) then 
-      print *, 'FESOM before 1st GatherV', displs_from_all_pes(npes), counts_from_all_pes(npes), number_of_all_points
+      print *, 'FESOM before 1st GatherV', displs_from_all_pes(npes), counts_from_all_pes(npes), number_of_all_nodes
     endif
-    CALL MPI_GATHERV(my_x_coords, my_number_of_points, MPI_DOUBLE_PRECISION, all_x_coords,  &
+    CALL MPI_GATHERV(my_nx_coords, my_number_of_nodes, MPI_DOUBLE_PRECISION, all_nx_coords,  &
+                    counts_from_all_pes, displs_from_all_pes, MPI_DOUBLE_PRECISION, localroot, MPI_COMM_FESOM, ierror)
+    CALL MPI_GATHERV(my_ex_coords, my_number_of_elements, MPI_DOUBLE_PRECISION, all_ex_coords,  &
                     counts_from_all_pes, displs_from_all_pes, MPI_DOUBLE_PRECISION, localroot, MPI_COMM_FESOM, ierror)
 
     if (mype .eq. 0) then 
       print *, 'FESOM before 2nd GatherV'
     endif
-    CALL MPI_GATHERV(my_y_coords, my_number_of_points, MPI_DOUBLE_PRECISION, all_y_coords,  &
+    CALL MPI_GATHERV(my_ny_coords, my_number_of_nodes, MPI_DOUBLE_PRECISION, all_ny_coords,  &
+                    counts_from_all_pes, displs_from_all_pes, MPI_DOUBLE_PRECISION, localroot, MPI_COMM_FESOM, ierror)
+    CALL MPI_GATHERV(my_ey_coords, my_number_of_elements, MPI_DOUBLE_PRECISION, all_ny_coords,  &
                     counts_from_all_pes, displs_from_all_pes, MPI_DOUBLE_PRECISION, localroot, MPI_COMM_FESOM, ierror)
 
     if (mype .eq. 0) then 
       print *, 'FESOM before 3rd GatherV'
     endif
-    CALL MPI_GATHERV(area(1,:), my_number_of_points, MPI_DOUBLE_PRECISION, all_area,  &
+    CALL MPI_GATHERV(area(1,:), my_number_of_nodes, MPI_DOUBLE_PRECISION, all_area,  &
                     counts_from_all_pes, displs_from_all_pes, MPI_DOUBLE_PRECISION, localroot, MPI_COMM_FESOM, ierror)
 
     if (mype .eq. 0) then 
@@ -358,16 +389,20 @@ contains
        IF (il_flag .NE. 0) THEN
 
           print *, 'FESOM before write grid'
-          CALL oasis_write_grid (grid_name, number_of_all_points, 1, all_x_coords(:,:), all_y_coords(:,:))
+          CALL oasis_write_grid (grid_name, number_of_all_nodes, 1, all_nx_coords(:,:), all_ny_coords(:,:))
 
-          ALLOCATE(unstr_mask(number_of_all_points, 1))
+          print *, 'FESOM before write corners'
+          CALL oasis_write_grid (grid_name, number_of_all_elements, 1, all_ex_coords(:,:), all_ey_coords(:,:))
+
+          ALLOCATE(unstr_mask(number_of_all_nodes, 1))
+          ALLOCATE(unstr_mask(number_of_all_elements, 1))
           unstr_mask=0
           print *, 'FESOM before write mask'
-          CALL oasis_write_mask(grid_name, number_of_all_points, 1, unstr_mask)
+          CALL oasis_write_mask(grid_name, number_of_all_nodes, 1, unstr_mask)
           DEALLOCATE(unstr_mask)
 
           print *, 'FESOM before write area'
-          CALL oasis_write_area(grid_name, number_of_all_points, 1, all_area)
+          CALL oasis_write_area(grid_name, number_of_all_nodes, 1, all_area)
 
        end if
       print *, 'FESOM before terminate_grids_writing'
@@ -377,7 +412,8 @@ contains
      
 
 
-    DEALLOCATE(all_x_coords, all_y_coords, my_x_coords, my_y_coords) 
+    DEALLOCATE(all_nx_coords, all_ny_coords, my_nx_coords, my_ny_coords) 
+    DEALLOCATE(all_ex_coords, all_ey_coords, my_ex_coords, my_ey_coords) 
 !------------------------------------------------------------------
 ! 3rd Declare the transient variables
 !------------------------------------------------------------------
@@ -450,7 +486,7 @@ contains
 !
 ! ... Announce send variables, all on T points. 
 !
-    total_shape(1) = number_of_all_points
+    total_shape(1) = number_of_all_nodes
     total_shape(2) = 1
 
     do i = 1, nsend
