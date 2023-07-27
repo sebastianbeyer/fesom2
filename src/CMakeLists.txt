@@ -60,6 +60,8 @@ endif()
 # two targets would allow e.g. setting different compiler options or preprocessor definition, which would be error prone.
 option(BUILD_FESOM_AS_LIBRARY "Build a library instead of an executable" OFF)
 
+set(FESOM_INSTALL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/../.." CACHE FILEPATH "directory where FESOM will be installed to via 'make install'")
+
 # get our source files
 set(src_home ${CMAKE_CURRENT_LIST_DIR}) # path to src directory starting from the dir containing our CMakeLists.txt
 if(${USE_ICEPACK})
@@ -209,10 +211,9 @@ if(${ENABLE_OPENMP} AND NOT ${CMAKE_Fortran_COMPILER_ID} STREQUAL Cray)
 endif()
 
 
-set(FESOM_INSTALL_PREFIX "${CMAKE_CURRENT_LIST_DIR}/.." CACHE FILEPATH "directory where FESOM will be installed to via 'make install'")
 if(${BUILD_FESOM_AS_LIBRARY})
-   install(TARGETS ${PROJECT_NAME} DESTINATION "${FESOM_INSTALL_PREFIX}/lib")
-   install(TARGETS ${PROJECT_NAME}_C DESTINATION "${FESOM_INSTALL_PREFIX}/lib")
+   install(TARGETS ${PROJECT_NAME} EXPORT ifs_sp-targets DESTINATION "${FESOM_INSTALL_PREFIX}/lib")
+   install(TARGETS ${PROJECT_NAME}_C EXPORT ifs_sp-targets DESTINATION "${FESOM_INSTALL_PREFIX}/lib")
 else()
    set(FESOM_INSTALL_FILEPATH "${FESOM_INSTALL_PREFIX}/bin/fesom.x")
 get_filename_component(FESOM_INSTALL_PATH ${FESOM_INSTALL_FILEPATH} DIRECTORY)
