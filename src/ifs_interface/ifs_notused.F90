@@ -7,14 +7,14 @@ SUBROUTINE nemogcmcoup_mlflds_get( mype, npes, icomm, &
    &                               nlev, nopoints, pgt3d, pgs3d, pgu3d, pgv3d )
 
    ! Interpolate sst, ice: surf T; albedo; concentration; thickness,
-   ! snow thickness and currents from the ORCA grid to the Gaussian grid. 
-   
+   ! snow thickness and currents from the ORCA grid to the Gaussian grid.
+
    ! This routine can be called at any point in time since it does
-   ! the necessary message passing in parinter_fld. 
+   ! the necessary message passing in parinter_fld.
 
    USE par_kind
    IMPLICIT NONE
-   
+
    ! Arguments
    REAL(wpIFS), DIMENSION(nopoints,nlev) :: pgt3d, pgs3d, pgu3d, pgv3d
    ! Message passing information
@@ -34,16 +34,16 @@ SUBROUTINE nemogcmcoup_get( mype, npes, icomm, &
    &                        nopoints, pgsst, pgice, pgucur, pgvcur )
 
    ! Interpolate sst, ice and currents from the ORCA grid
-   ! to the Gaussian grid. 
-   
+   ! to the Gaussian grid.
+
    ! This routine can be called at any point in time since it does
-   ! the necessary message passing in parinter_fld. 
+   ! the necessary message passing in parinter_fld.
 
    USE par_kind
 
    IMPLICIT NONE
 
-   
+
    ! Arguments
 
    ! Message passing information
@@ -64,14 +64,14 @@ END SUBROUTINE nemogcmcoup_get
 SUBROUTINE nemogcmcoup_get_1way( mype, npes, icomm )
 
    ! Interpolate sst, ice and currents from the ORCA grid
-   ! to the Gaussian grid. 
-   
+   ! to the Gaussian grid.
+
    ! This routine can be called at any point in time since it does
-   ! the necessary message passing in parinter_fld. 
+   ! the necessary message passing in parinter_fld.
 
    IMPLICIT NONE
 
-   
+
    ! Arguments
 
    ! Message passing information
@@ -89,7 +89,7 @@ SUBROUTINE nemogcmcoup_mlinit( mype, npes, icomm, &
    &                           nlev, nopoints, pdep, pmask )
 
    ! Get information about the vertical discretization of the ocean model
-   
+
    ! nlevs are maximum levels on input and actual number levels on output
 
    USE par_kind
@@ -113,7 +113,7 @@ SUBROUTINE nemogcmcoup_mlinit( mype, npes, icomm, &
 
    WRITE(0,*)'nemogcmcoup_mlinit should not be called when coupling to fesom.'
    CALL abort
-   
+
 END SUBROUTINE nemogcmcoup_mlinit
 
 
@@ -123,7 +123,7 @@ SUBROUTINE nemogcmcoup_update( mype, npes, icomm, &
 
    ! Update fluxes in nemogcmcoup_data by parallel
    ! interpolation of the input gaussian grid data
-   
+
    USE par_kind
 
    IMPLICIT NONE
@@ -145,7 +145,7 @@ SUBROUTINE nemogcmcoup_update( mype, npes, icomm, &
 
    WRITE(0,*)'nemogcmcoup_update should be called with with.'
    CALL abort
-   
+
 END SUBROUTINE nemogcmcoup_update
 
 SUBROUTINE nemogcmcoup_update_add( mype, npes, icomm, &
@@ -153,7 +153,7 @@ SUBROUTINE nemogcmcoup_update_add( mype, npes, icomm, &
 
    ! Update addetiona in nemogcmcoup_data by parallel
    ! interpolation of the input gaussian grid data
-   
+
    USE par_kind
    USE fesom_main_storage_module, only: fesom => f ! only: MPI_COMM_FESOM, mype (previously in g_parsup)
 
@@ -177,7 +177,7 @@ SUBROUTINE nemogcmcoup_update_add( mype, npes, icomm, &
    if(fesom%mype==0) then
    WRITE(0,*)'In nemogcmcoup_update_add FESOM dummy routine. Proceeding...'
    !CALL abort
-   endif   
+   endif
 
 END SUBROUTINE nemogcmcoup_update_add
 
@@ -195,14 +195,14 @@ SUBROUTINE nemogcmcoup_wam_coupinit( mype, npes, icomm, &
 
    ! Message passing information
    INTEGER, INTENT(IN) :: mype,npes,icomm
-   ! WAM grid information   
+   ! WAM grid information
    ! Number of local and global points
    INTEGER, INTENT(IN) :: nlocpoints, nglopoints
    ! Integer mask and global indices
    INTEGER, DIMENSION(nlocpoints), INTENT(IN) :: nlocmsk, ngloind
    ! Unit for output in parinter_init
    INTEGER :: iunit
-   
+
    WRITE(0,*)'Wam coupling not implemented for FESOM'
    CALL abort
 
@@ -214,14 +214,14 @@ SUBROUTINE nemogcmcoup_wam_get( mype, npes, icomm, &
    &                            pwucur, pwvcur, licethk )
 
    ! Interpolate from the ORCA grid
-   ! to the WAM grid. 
-   
+   ! to the WAM grid.
+
    ! This routine can be called at any point in time since it does
-   ! the necessary message passing in parinter_fld. 
+   ! the necessary message passing in parinter_fld.
 
    USE par_kind
    IMPLICIT NONE
-   
+
    ! Arguments
 
    ! Message passing information
@@ -248,7 +248,7 @@ SUBROUTINE nemogcmcoup_wam_update( mype, npes, icomm, &
 
    ! Update fluxes in nemogcmcoup_data by parallel
    ! interpolation of the input WAM grid data
-   
+
    USE par_kind
 
    IMPLICIT NONE
@@ -267,7 +267,7 @@ SUBROUTINE nemogcmcoup_wam_update( mype, npes, icomm, &
    LOGICAL, INTENT(IN) :: ldebug
 
    ! Local variables
-   
+
    WRITE(0,*)'nemogcmcoup_wam_update should not be called when coupling to fesom.'
    CALL abort
 
@@ -280,7 +280,7 @@ SUBROUTINE nemogcmcoup_wam_update_stress( mype, npes, icomm, npoints, &
 
    ! Update stresses in nemogcmcoup_data by parallel
    ! interpolation of the input WAM grid data
-   
+
    USE par_kind
 
    IMPLICIT NONE
@@ -299,7 +299,7 @@ SUBROUTINE nemogcmcoup_wam_update_stress( mype, npes, icomm, npoints, &
    LOGICAL, INTENT(IN) :: ldebug
 
    ! Local variables
-   
+
    WRITE(0,*)'nemogcmcoup_wam_update_stress should not be called when coupling to fesom.'
    CALL abort
 
