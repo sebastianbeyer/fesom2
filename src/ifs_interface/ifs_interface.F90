@@ -9,6 +9,234 @@ MODULE nemogcmcoup_steps
    INTEGER :: substeps !per IFS timestep
 END MODULE nemogcmcoup_steps
 
+!=====================================================
+! IFAUDIT (local addition, snake_ifs_fesom): the coupled fluxes integrated
+! on BOTH sides of the Gaussian -> FESOM interpolation, once a model day, so
+! that what the IFS hands over and what FESOM receives can be compared.
+! Read-only: nothing here is written back into either model.
+!
+! Per coupling call and hemisphere (geographic latitude > 0 is NH):
+!
+!  IFS side, over the Gaussian points the remap uses (src_grid_imask = 1),
+!  cell area a from the row latitudes (band edges halfway between rows), and
+!  c = the ice fraction FESOM last sent (pgifr), zeroed below 0.005 as
+!  updnemoocean.F90 does with RCIMIN (suphec.F90 default when coupled):
+!    1 ocean area           sum a                      [m2]
+!    2 ice area             sum a c                    [m2]
+!    3 heat, total          sum a ((1-c) qo + c qi)    [W]  qo = qs_oce + qns_oce
+!    4 heat, open water     sum a (1-c) qo             [W]  qi = qs_ice + qns_ice
+!    5 heat, ice            sum a c qi                 [W]
+!    6 evap_tot             sum a evap_tot             [kg/s]
+!    7 sublimation          sum a c evap_ice           [kg/s]
+!    8 precipitation        sum a (liq + sol)          [kg/s]
+!    9 ice stress           sum a c |tau_ice|          [N]
+!  FESOM side, over its own nodes, area areasvol(1,n), its own ice fraction A,
+!  the fields as interpolated (before units/sign/rotation):
+!   10-18  the same nine with A in place of c
+!  FESOM nodes with the IFS's c interpolated to them (c~), so that 3 vs 20
+!  is the interpolation alone and 20 vs 12 the ice-fraction mismatch:
+!   19 sum w c~    20 sum w ((1-c~) qo + c~ qi)    21 sum w c~ qi
+!  Ice edge: qi at a FESOM node is a 16-point blend of Gaussian points, some
+!  of which may have no ice in the IFS (their qi is the flux of a tile with
+!  zero fraction). With I = 1 where c > 0, interpolated to wI, and
+!  qi_clean = interp(I qi)/wI, the flux FESOM's ice gets from ice-free points:
+!   22 sum w A (1-wI)                      [m2]  ice area fed by ice-free points
+!   23 sum w A (qi - qi_clean), wI > 1e-6  [W]
+!   24 sum w A qi,               wI <= 1e-6 [W]  ice the IFS has no ice under
+!   25 sum w A,                  wI <= 1e-6 [m2]
+!
+! Printed by rank 0 as one line per model day, the day's MEAN over its
+! coupling calls, NH block then SH block:
+!   ' IFAUDIT yyyy-mm-dd ncalls v1..v25(NH) v1..v25(SH)'
+! A day is closed by the first call that finds the FESOM clock on the next
+! day, so it holds the calls made while the clock read that day.
+!=====================================================
+MODULE ifaudit_state
+   USE par_kind
+   IMPLICIT NONE
+   INTEGER, PARAMETER :: ifa_nq = 25
+   REAL(wpIFS), PARAMETER :: ifa_cimin = 0.005_wpIFS
+   REAL(wpIFS), ALLOCATABLE, DIMENSION(:) :: ifa_garea, ifa_gci
+   INTEGER,     ALLOCATABLE, DIMENSION(:) :: ifa_gmask, ifa_ghemi
+   REAL(wpIFS), DIMENSION(ifa_nq,2) :: ifa_acc = 0.0_wpIFS
+   INTEGER :: ifa_ncalls = 0
+   INTEGER :: ifa_date = -1
+   LOGICAL :: ifa_ready = .FALSE.
+
+CONTAINS
+
+   SUBROUTINE ifaudit_setup( remap, npoints, ngloind, mype, icomm )
+      ! Gaussian cell areas, mask and hemisphere for this rank's points,
+      ! from the source grid of the Gaussian -> FESOM remap. Only rank 0 holds
+      ! its latitudes (scripremap_read_sgl broadcasts the mask and the weights
+      ! but, interpolation-only, not the coordinates), so they come from there.
+      USE mpi
+      USE scripremap
+      USE o_PARAM, ONLY : r_earth, pi
+      TYPE(scripremaptype), INTENT(IN) :: remap
+      INTEGER, INTENT(IN) :: npoints, mype, icomm
+      INTEGER, DIMENSION(npoints), INTENT(IN) :: ngloind
+      REAL(wpIFS), ALLOCATABLE, DIMENSION(:) :: lat, area, rowlat
+      INTEGER,     ALLOCATABLE, DIMENSION(:) :: rowstart
+      INTEGER :: ng, j, k, nrow, ierr
+      REAL(wpIFS) :: conv, en, es
+
+      ng = remap%src%grid_size
+      ALLOCATE(lat(ng), area(ng))
+      IF (mype == 0) THEN
+         conv = pi/180.0_wpIFS
+         IF (INDEX(remap%src%grid_center_lat_units, 'rad') > 0) conv = 1.0_wpIFS
+         lat(:) = remap%src%grid_center_lat(:)*conv
+      ENDIF
+      CALL MPI_BCAST(lat, ng, MPI_DOUBLE_PRECISION, 0, icomm, ierr)
+      ! rows are contiguous runs of one latitude, north to south
+      nrow = 1
+      DO j = 2, ng
+         IF (lat(j) > lat(j-1)) THEN
+            IF (mype == 0) WRITE(*,*) ' IFAUDIT disabled: Gaussian rows not ordered north to south'
+            RETURN
+         ENDIF
+         IF (lat(j) < lat(j-1)) nrow = nrow + 1
+      ENDDO
+      ALLOCATE(rowstart(nrow+1), rowlat(nrow))
+      k = 1
+      rowstart(1) = 1
+      rowlat(1) = lat(1)
+      DO j = 2, ng
+         IF (lat(j) < lat(j-1)) THEN
+            k = k + 1
+            rowstart(k) = j
+            rowlat(k) = lat(j)
+         ENDIF
+      ENDDO
+      rowstart(nrow+1) = ng + 1
+      DO k = 1, nrow
+         IF (k == 1) THEN
+            en = 0.5_wpIFS*pi
+         ELSE
+            en = 0.5_wpIFS*(rowlat(k-1) + rowlat(k))
+         ENDIF
+         IF (k == nrow) THEN
+            es = -0.5_wpIFS*pi
+         ELSE
+            es = 0.5_wpIFS*(rowlat(k) + rowlat(k+1))
+         ENDIF
+         area(rowstart(k):rowstart(k+1)-1) = 2.0_wpIFS*pi*r_earth**2*(SIN(en) - SIN(es)) &
+            & / REAL(rowstart(k+1) - rowstart(k), wpIFS)
+      ENDDO
+
+      ALLOCATE(ifa_garea(npoints), ifa_gci(npoints), ifa_gmask(npoints), ifa_ghemi(npoints))
+      DO j = 1, npoints
+         ifa_garea(j) = area(ngloind(j))
+         ifa_gmask(j) = remap%src%grid_imask(ngloind(j))
+         ifa_ghemi(j) = 2
+         IF (lat(ngloind(j)) > 0.0_wpIFS) ifa_ghemi(j) = 1
+      ENDDO
+      ifa_gci(:) = 0.0_wpIFS
+      ifa_ready = .TRUE.
+      IF (mype == 0) WRITE(*,'(A,I8,I6,2F12.8)') ' IFAUDIT_SETUP points rows sphere_frac ocean_frac ', &
+         & ng, nrow, SUM(area)/(4.0_wpIFS*pi*r_earth**2), &
+         & SUM(area, MASK=remap%src%grid_imask == 1)/(4.0_wpIFS*pi*r_earth**2)
+      DEALLOCATE(lat, area, rowstart, rowlat)
+   END SUBROUTINE ifaudit_setup
+
+   SUBROUTINE ifaudit_update( mype, npes, icomm, npoints, &
+      &                       qs_oce, qns_oce, qs_ice, qns_ice, evap_tot, evap_ice, &
+      &                       prcp_liq, prcp_sol, taux_ice, tauy_ice, ndst, zrecv )
+      ! Accumulate one coupling call; print and reset when the day changes.
+      ! zrecv holds the eleven fields as nemogcmcoup_lim2_update interpolated
+      ! them: qs_oce, qns_oce, q_ice, evap_tot, evap_ice, liq, sol, tau (4).
+      USE mpi
+      USE fesom_main_storage_module, only: fesom => f
+      USE parinter
+      USE interinfo
+      USE g_clock, ONLY : yearnew, month, day_in_month
+      INTEGER, INTENT(IN) :: mype, npes, icomm, npoints, ndst
+      REAL(wpIFS), DIMENSION(npoints), INTENT(IN) :: qs_oce, qns_oce, qs_ice, qns_ice, &
+         & evap_tot, evap_ice, prcp_liq, prcp_sol, taux_ice, tauy_ice
+      REAL(wpIFS), DIMENSION(ndst,11), INTENT(IN) :: zrecv
+      REAL(wpIFS), DIMENSION(npoints,3) :: zs
+      REAL(wpIFS), DIMENSION(ndst,3) :: zr
+      REAL(wpIFS), DIMENSION(ifa_nq,2) :: glo
+      REAL(wpIFS) :: a, c, qo, qi, w, aa, ct, wi, qclean
+      INTEGER :: n, h, today, ierr
+
+      IF (.NOT. ifa_ready) RETURN
+
+      today = yearnew*10000 + month*100 + day_in_month
+      IF (ifa_date >= 0 .AND. today /= ifa_date .AND. ifa_ncalls > 0) THEN
+         CALL MPI_REDUCE(ifa_acc, glo, 2*ifa_nq, MPI_DOUBLE_PRECISION, MPI_SUM, 0, icomm, ierr)
+         IF (mype == 0) WRITE(*,'(A,I5.4,"-",I2.2,"-",I2.2,I6,50ES16.8)') ' IFAUDIT ', &
+            & ifa_date/10000, MOD(ifa_date/100, 100), MOD(ifa_date, 100), ifa_ncalls, &
+            & glo(:,1)/REAL(ifa_ncalls, wpIFS), glo(:,2)/REAL(ifa_ncalls, wpIFS)
+         ifa_acc(:,:) = 0.0_wpIFS
+         ifa_ncalls = 0
+      ENDIF
+      ifa_date = today
+
+      ! IFS side
+      DO n = 1, npoints
+         c = ifa_gci(n)
+         IF (c <= ifa_cimin) c = 0.0_wpIFS
+         zs(n,1) = c
+         zs(n,2) = 0.0_wpIFS
+         IF (c > 0.0_wpIFS) zs(n,2) = 1.0_wpIFS
+         zs(n,3) = zs(n,2)*(qs_ice(n) + qns_ice(n))
+         IF (ifa_gmask(n) /= 1) CYCLE
+         h  = ifa_ghemi(n)
+         a  = ifa_garea(n)
+         qo = qs_oce(n) + qns_oce(n)
+         qi = qs_ice(n) + qns_ice(n)
+         ifa_acc(1,h) = ifa_acc(1,h) + a
+         ifa_acc(2,h) = ifa_acc(2,h) + a*c
+         ifa_acc(3,h) = ifa_acc(3,h) + a*((1.0_wpIFS - c)*qo + c*qi)
+         ifa_acc(4,h) = ifa_acc(4,h) + a*(1.0_wpIFS - c)*qo
+         ifa_acc(5,h) = ifa_acc(5,h) + a*c*qi
+         ifa_acc(6,h) = ifa_acc(6,h) + a*evap_tot(n)
+         ifa_acc(7,h) = ifa_acc(7,h) + a*c*evap_ice(n)
+         ifa_acc(8,h) = ifa_acc(8,h) + a*(prcp_liq(n) + prcp_sol(n))
+         ifa_acc(9,h) = ifa_acc(9,h) + a*c*SQRT(taux_ice(n)**2 + tauy_ice(n)**2)
+      ENDDO
+
+      CALL parinter_fld_mult( 3, mype, npes, icomm, gausstoT, npoints, zs, ndst, zr )
+
+      ! FESOM side
+      DO n = 1, ndst
+         h = 2
+         IF (fesom%mesh%geo_coord_nod2D(2,n) > 0.0_wpIFS) h = 1
+         w  = fesom%mesh%areasvol(1,n)
+         aa = fesom%ice%data(1)%values(n)
+         qo = zrecv(n,1) + zrecv(n,2)
+         qi = zrecv(n,3)
+         ifa_acc(10,h) = ifa_acc(10,h) + w
+         ifa_acc(11,h) = ifa_acc(11,h) + w*aa
+         ifa_acc(12,h) = ifa_acc(12,h) + w*((1.0_wpIFS - aa)*qo + aa*qi)
+         ifa_acc(13,h) = ifa_acc(13,h) + w*(1.0_wpIFS - aa)*qo
+         ifa_acc(14,h) = ifa_acc(14,h) + w*aa*qi
+         ifa_acc(15,h) = ifa_acc(15,h) + w*zrecv(n,4)
+         ifa_acc(16,h) = ifa_acc(16,h) + w*aa*zrecv(n,5)
+         ifa_acc(17,h) = ifa_acc(17,h) + w*(zrecv(n,6) + zrecv(n,7))
+         ifa_acc(18,h) = ifa_acc(18,h) + w*aa*SQRT(zrecv(n,10)**2 + zrecv(n,11)**2)
+         ct = zr(n,1)
+         ifa_acc(19,h) = ifa_acc(19,h) + w*ct
+         ifa_acc(20,h) = ifa_acc(20,h) + w*((1.0_wpIFS - ct)*qo + ct*qi)
+         ifa_acc(21,h) = ifa_acc(21,h) + w*ct*qi
+         wi = zr(n,2)
+         IF (wi > 1.0e-6_wpIFS) THEN
+            qclean = zr(n,3)/wi
+            ifa_acc(22,h) = ifa_acc(22,h) + w*aa*(1.0_wpIFS - wi)
+            ifa_acc(23,h) = ifa_acc(23,h) + w*aa*(qi - qclean)
+         ELSE
+            ifa_acc(22,h) = ifa_acc(22,h) + w*aa
+            ifa_acc(24,h) = ifa_acc(24,h) + w*aa*qi
+            ifa_acc(25,h) = ifa_acc(25,h) + w*aa
+         ENDIF
+      ENDDO
+      ifa_ncalls = ifa_ncalls + 1
+   END SUBROUTINE ifaudit_update
+
+END MODULE ifaudit_state
+
 SUBROUTINE nemogcmcoup_init_ioserver( icomm, lnemoioserver, irequired, iprovided, lmpi1)
 
     ! Initialize the NEMO mppio server
@@ -133,6 +361,7 @@ SUBROUTINE nemogcmcoup_coupinit( mypeIN, npesIN, icomm, &
    USE parinter
    USE scripremap
    USE interinfo
+   USE ifaudit_state, ONLY : ifaudit_setup
    IMPLICIT NONE
 
    ! Input arguments
@@ -269,6 +498,8 @@ SUBROUTINE nemogcmcoup_coupinit( mypeIN, npesIN, icomm, &
          & nopoints, noglopoints, omask, ogloind, & 
          & remap_gauss_to_T, gausstoT, lcommout, TRIM(commoutprefix)//'_gtoT', &
          & iunit )
+      ! IFAUDIT: Gaussian areas and mask, from this remap's source grid
+      CALL ifaudit_setup( remap_gauss_to_T, npoints, ngloind, fesom%mype, icomm )
       CALL scripremap_dealloc(remap_gauss_to_T)
       IF (lwritedist) THEN
          CALL parinter_write( fesom%mype, fesom%npes, nglopoints, noglopoints, gausstoT,  &
@@ -327,6 +558,7 @@ SUBROUTINE nemogcmcoup_lim2_get( mype, npes, icomm, &
    USE parinter
    USE scripremap
    USE interinfo
+   USE ifaudit_state, ONLY : ifa_ready, ifa_gci
 
    IMPLICIT NONE
    
@@ -541,6 +773,8 @@ SUBROUTINE nemogcmcoup_lim2_get( mype, npes, icomm, &
    end do
 !$OMP END DO
 !$OMP END PARALLEL
+   ! IFAUDIT: the ice fraction the IFS will use until the next call
+   IF (ifa_ready) ifa_gci(1:nopoints) = pgifr(1:nopoints)
 END SUBROUTINE nemogcmcoup_lim2_get
 
 
@@ -756,6 +990,7 @@ SUBROUTINE nemogcmcoup_lim2_update( mype, npes, icomm, &
    USE parinter
    USE scripremap
    USE interinfo
+   USE ifaudit_state, ONLY : ifaudit_update
 
    IMPLICIT NONE
 
@@ -1173,6 +1408,10 @@ SUBROUTINE nemogcmcoup_lim2_update( mype, npes, icomm, &
    call exchange_nod(enthalpyoffuse, fesom%partit)
 !$OMP END MASTER
 !$OMP END PARALLEL
+   ! IFAUDIT: integrate both sides of this exchange (read-only)
+   CALL ifaudit_update( mype, npes, icomm, npoints, &
+      &                 qs___oce, qns__oce, qs___ice, qns__ice, evap_tot, evap_ice, &
+      &                 prcp_liq, prcp_sol, taux_ice, tauy_ice, myDim_nod2D, zrecvnf )
 END SUBROUTINE nemogcmcoup_lim2_update
 
 subroutine ocean_update_runoff(NBASIN_RUNOFF, BASIN_RUNOFF)

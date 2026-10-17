@@ -21,7 +21,7 @@ module write_step_info_module
     implicit none
 
     private
-    public :: write_step_info, check_blowup, write_enegry_info, &
+    public :: write_step_info, check_blowup, write_enegry_info, write_icebudget, &
               plot_fesomlogo, plot_fesomlogo_lildevil, &
               plot_fesomlogo_expl
 
@@ -731,4 +731,181 @@ subroutine plot_fesomlogo_expl()
 end subroutine plot_fesomlogo_expl
  
 
+!
+!
+!===============================================================================
+! ICEBUDGET / ICEBUDGET3 (local addition, snake_ifs_fesom), ported to 2.8.3.
+! On 2.8.0 these blocks sat at the top of write_step_info, which received the
+! ice and the mesh. 2.8.3's write_step_info only prints a precomputed monitor
+! record, so they live here, called every ocean step right after it from
+! fesom_module.F90. The code below is the 2.8.0 variant's (libfesom_variants/
+! icebudget3), verbatim except that the associate_*.h headers 2.8.3 removed
+! are replaced by the pointers they used to set. Read-only.
+subroutine write_icebudget(istep, ice, partit, mesh)
+    use g_config, only: step_per_day
+    use g_clock,  only: yearnew, month, day_in_month, timenew
+    implicit none
+    integer,        intent(in)            :: istep
+    type(t_ice),    intent(in),    target :: ice
+    type(t_partit), intent(inout), target :: partit
+    type(t_mesh),   intent(in),    target :: mesh
+    integer                    :: n
+    real(kind=WP), dimension(:,:), pointer :: geo_coord_nod2D, areasvol
+    integer,       dimension(:),   pointer :: ulevels_nod2D
+    integer,                       pointer :: myDim_nod2D, mype, MPI_COMM_FESOM, MPIerr
+    ! ICEBUDGET: hemispheric sea ice integrals on the native mesh, see below
+    integer                    :: hemi
+    real(kind=WP)              :: w, a, ib_loc(7,2), ib_glo(7,2)
+    ! ICEBUDGET3: five regions, daily-mean rates, see below
+    integer                    :: ib2_reg, ib2_nreg, ib2_regs(3)
+    real(kind=WP)              :: ib2_lat, ib2_lon, ib2_s, ib2_tfrz, ib2_ocn, ib2_atm
+    real(kind=WP)              :: ib2_loc(9,5), ib2_glo(9,5)
+    real(kind=WP), save        :: ib2_acc(4,5) = 0.0_WP
+    integer,       save        :: ib2_nacc = 0
+    real(kind=WP), parameter   :: ib2_deg = 180.0_WP/3.141592653589793_WP
+    ! gamma_t of ice_growth (ice_thermo_cpl.F90), a local parameter there
+    real(kind=WP), parameter   :: ib2_gamma_t = 10.0_WP/86400.0_WP
+    myDim_nod2D     => partit%myDim_nod2D
+    mype            => partit%mype
+    MPI_COMM_FESOM  => partit%MPI_COMM_FESOM
+    MPIerr          => partit%MPIerr
+    geo_coord_nod2D => mesh%geo_coord_nod2D
+    areasvol        => mesh%areasvol
+    ulevels_nod2D   => mesh%ulevels_nod2D
+
+    !___________________________________________________________________________
+    ! ICEBUDGET (local addition, snake_ifs_fesom): once per model day, the
+    ! hemispheric sea ice integrals on the NATIVE mesh, so the series derived
+    ! from the HEALPix archive can be checked against the model's own numbers.
+    ! Read-only: sums over owned nodes and one MPI_AllREDUCE, nothing written
+    ! back. Per hemisphere, in this order:
+    !   area   sum(a_ice*A)                 m2
+    !   extent sum(A where a_ice>0.15)      m2
+    !   vol    sum(m_ice*A)                 m3   (m_ice = volume per cell area)
+    !   snow   sum(m_snow*A)                m3
+    !   thd    sum(thdgr*A)                 m3/s thermodynamic volume tendency
+    !   dyn    sum(dyngr*A)                 m3/s advective tendency (~0 per hemisphere)
+    !   ocean  sum(A)                       m2   the mesh's own ocean area
+    ! The two tendencies are the last ice step's, not daily means.
+    if (use_ice .and. mod(istep, step_per_day)==0) then
+       ib_loc = 0.0_WP
+       do n=1, myDim_nod2D
+          if (ulevels_nod2D(n) > 1) cycle          ! cavity: no sea ice
+          hemi = 2
+          if (geo_coord_nod2D(2, n) > 0.0_WP) hemi = 1
+          w = areasvol(1, n)
+          a = ice%data(1)%values(n)
+          ib_loc(1, hemi) = ib_loc(1, hemi) + w*a
+          if (a > 0.15_WP) ib_loc(2, hemi) = ib_loc(2, hemi) + w
+          ib_loc(3, hemi) = ib_loc(3, hemi) + w*ice%data(2)%values(n)
+          ib_loc(4, hemi) = ib_loc(4, hemi) + w*ice%data(3)%values(n)
+          ib_loc(5, hemi) = ib_loc(5, hemi) + w*ice%thermo%thdgr(n)
+          ib_loc(6, hemi) = ib_loc(6, hemi) + w*ice%thermo%dyngr(n)
+          ib_loc(7, hemi) = ib_loc(7, hemi) + w
+       end do
+       call MPI_AllREDUCE(ib_loc, ib_glo, 14, MPI_WP, MPI_SUM, MPI_COMM_FESOM, MPIerr)
+       if (mype==0) write(*,'(A,I5.4,"-",I2.2,"-",I2.2,F9.1,14ES16.8)') &
+            ' ICEBUDGET ', yearnew, month, day_in_month, timenew, &
+            ib_glo(:, 1), ib_glo(:, 2)
+    end if
+    !___________________________________________________________________________
+    ! ICEBUDGET3 (local addition, snake_ifs_fesom): the ICEBUDGET integrals for
+    ! five regions -- 1 NH, 2 SH, 3 AO (Arctic Ocean, below), 4 BK (its
+    ! Barents/Kara part), 5 CA (AO without BK: the central basin with the
+    ! Siberian, Beaufort and western CAA shelves) -- with every
+    ! RATE averaged over all ocean steps of the day rather than sampled at its
+    ! last one, and two more rates that split the thermodynamic term:
+    !   1 area  2 extent  3 vol  4 snow   end-of-day state, as in ICEBUDGET
+    !   5 thd   sum(thdgr*A)                         m3/s  daily mean
+    !   6 dyn   sum(dyngr*A)                         m3/s  daily mean; over AO
+    !           the net advective IMPORT into the Arctic Ocean (< 0: export)
+    !   7 ocn   sum(a*(T_oc-T_f)*gamma_t*cc/cl*A)    m3/s  daily mean; the
+    !           ocean-to-ice heat flux as ice melted at the base (> 0 melts),
+    !           formed exactly as Qocnice in ice_growth
+    !   8 atm   sum(-a*(qres+qcon)/cl*A)             m3/s  daily mean; the
+    !           atmosphere's net flux over the ice fraction as ice grown (> 0)
+    !           or melted (< 0), Qatmice in ice_growth, snow melt included
+    !   9 ocean sum(A)                               m2
+    ! So thd ~ atm - ocn + open-water freezing - snow melt + flooding and
+    ! sublimation; only atm and ocn are recomputed, the rest is the residual.
+    ! AO: north of 80N everywhere; north of 66N from 100E eastward to 100W
+    ! (Laptev to Beaufort, the western CAA); north of 68N from 20E to 100E
+    ! (Barents east of the opening, Kara). That leaves out the Nordic Seas,
+    ! Baffin, Hudson Bay and the Bering Sea, so its gates are Fram Strait, the
+    ! Barents Sea opening, Bering Strait and the CAA east of 100W.
+    ! BK: the AO nodes from 20E to 100E south of 81N (Barents and Kara Seas up
+    ! to Franz Josef Land and Severnaya Zemlya), where Atlantic Water enters.
+    ! AO = BK + CA, so CA's dyn includes the BK<->CA exchange.
+    ! The line carries the number of steps averaged, so a partial day shows.
+    ! Read-only, like ICEBUDGET: nothing is written back.
+    if (use_ice) then
+       do n=1, myDim_nod2D
+          if (ulevels_nod2D(n) > 1) cycle          ! cavity: no sea ice
+          ib2_lat = geo_coord_nod2D(2, n)*ib2_deg
+          ib2_lon = geo_coord_nod2D(1, n)*ib2_deg
+          if (ib2_lon > 180.0_WP) ib2_lon = ib2_lon - 360.0_WP
+          ib2_nreg = 1
+          ib2_regs(1) = 2
+          if (ib2_lat > 0.0_WP) ib2_regs(1) = 1
+          if (ib2_lat >= 80.0_WP .or. &
+              (ib2_lat >= 66.0_WP .and. (ib2_lon >= 100.0_WP .or. ib2_lon <= -100.0_WP)) .or. &
+              (ib2_lat >= 68.0_WP .and. ib2_lon >= 20.0_WP .and. ib2_lon < 100.0_WP)) then
+             ib2_nreg = 3
+             ib2_regs(2) = 3
+             ib2_regs(3) = 5
+             if (ib2_lat < 81.0_WP .and. ib2_lon >= 20.0_WP .and. ib2_lon < 100.0_WP) ib2_regs(3) = 4
+          end if
+          w = areasvol(1, n)
+          a = ice%data(1)%values(n)
+          ib2_s = max(ice%srfoce_salt(n), 0.0_WP)
+          ib2_tfrz = -0.0575_WP*ib2_s + 1.7105e-3_WP*sqrt(ib2_s**3) - 2.155e-4_WP*(ib2_s**2)
+          ib2_ocn = a*(ice%srfoce_temp(n) - ib2_tfrz)*ib2_gamma_t*ice%thermo%cc/ice%thermo%cl
+          ib2_atm = -a*(ice%atmcoupl%flx_qres(n) + ice%atmcoupl%flx_qcon(n))/ice%thermo%cl
+          do ib2_reg = 1, ib2_nreg
+             ib2_acc(1, ib2_regs(ib2_reg)) = ib2_acc(1, ib2_regs(ib2_reg)) + w*ice%thermo%thdgr(n)
+             ib2_acc(2, ib2_regs(ib2_reg)) = ib2_acc(2, ib2_regs(ib2_reg)) + w*ice%thermo%dyngr(n)
+             ib2_acc(3, ib2_regs(ib2_reg)) = ib2_acc(3, ib2_regs(ib2_reg)) + w*ib2_ocn
+             ib2_acc(4, ib2_regs(ib2_reg)) = ib2_acc(4, ib2_regs(ib2_reg)) + w*ib2_atm
+          end do
+       end do
+       ib2_nacc = ib2_nacc + 1
+
+       if (mod(istep, step_per_day)==0) then
+          ib2_loc = 0.0_WP
+          do n=1, myDim_nod2D
+             if (ulevels_nod2D(n) > 1) cycle
+             ib2_lat = geo_coord_nod2D(2, n)*ib2_deg
+             ib2_lon = geo_coord_nod2D(1, n)*ib2_deg
+             if (ib2_lon > 180.0_WP) ib2_lon = ib2_lon - 360.0_WP
+             ib2_nreg = 1
+             ib2_regs(1) = 2
+             if (ib2_lat > 0.0_WP) ib2_regs(1) = 1
+             if (ib2_lat >= 80.0_WP .or. &
+                 (ib2_lat >= 66.0_WP .and. (ib2_lon >= 100.0_WP .or. ib2_lon <= -100.0_WP)) .or. &
+                 (ib2_lat >= 68.0_WP .and. ib2_lon >= 20.0_WP .and. ib2_lon < 100.0_WP)) then
+                ib2_nreg = 3
+                ib2_regs(2) = 3
+                ib2_regs(3) = 5
+                if (ib2_lat < 81.0_WP .and. ib2_lon >= 20.0_WP .and. ib2_lon < 100.0_WP) ib2_regs(3) = 4
+             end if
+             w = areasvol(1, n)
+             a = ice%data(1)%values(n)
+             do ib2_reg = 1, ib2_nreg
+                ib2_loc(1, ib2_regs(ib2_reg)) = ib2_loc(1, ib2_regs(ib2_reg)) + w*a
+                if (a > 0.15_WP) ib2_loc(2, ib2_regs(ib2_reg)) = ib2_loc(2, ib2_regs(ib2_reg)) + w
+                ib2_loc(3, ib2_regs(ib2_reg)) = ib2_loc(3, ib2_regs(ib2_reg)) + w*ice%data(2)%values(n)
+                ib2_loc(4, ib2_regs(ib2_reg)) = ib2_loc(4, ib2_regs(ib2_reg)) + w*ice%data(3)%values(n)
+                ib2_loc(9, ib2_regs(ib2_reg)) = ib2_loc(9, ib2_regs(ib2_reg)) + w
+             end do
+          end do
+          ib2_loc(5:8, :) = ib2_acc(1:4, :)/real(max(ib2_nacc, 1), WP)
+          call MPI_AllREDUCE(ib2_loc, ib2_glo, 45, MPI_WP, MPI_SUM, MPI_COMM_FESOM, MPIerr)
+          if (mype==0) write(*,'(A,I5.4,"-",I2.2,"-",I2.2,F9.1,I6,45ES16.8)') &
+               ' ICEBUDGET3 ', yearnew, month, day_in_month, timenew, ib2_nacc, &
+               ib2_glo(:, 1), ib2_glo(:, 2), ib2_glo(:, 3), ib2_glo(:, 4), ib2_glo(:, 5)
+          ib2_acc  = 0.0_WP
+          ib2_nacc = 0
+       end if
+    end if
+end subroutine write_icebudget
 end module write_step_info_module

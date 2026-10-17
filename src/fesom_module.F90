@@ -54,7 +54,8 @@ module fesom_main_storage_module
   use icb_allocate_module, only: allocate_icb
   use gen_forcing_init_module, only: forcing_setup
   use par_support_module, only: par_init
-  use write_step_info_module, only: plot_fesomlogo, write_step_info, write_enegry_info, check_blowup
+  use write_step_info_module, only: plot_fesomlogo, write_step_info, write_enegry_info, check_blowup, &
+                                    write_icebudget  ! ICEBUDGET/ICEBUDGET3, local addition
   use fesom_monitor_module, only: t_monitor, monitor_fill_ocean
   use fesom_conservation_module, only: conservation_before_step, conservation_after_step
   use, intrinsic :: iso_fortran_env, only : real32
@@ -1263,6 +1264,7 @@ contains
         call monitor_fill_ocean(f%ocean_monitor, n, mod(n,logfile_outfreq)==0, &
                                 f%ice, f%dynamics, f%tracers, f%partit, f%mesh)
         call write_step_info(n, logfile_outfreq, f%ocean_monitor, f%dynamics, f%partit)
+        call write_icebudget(n, f%ice, f%partit, f%mesh)  ! local addition (snake_ifs_fesom)
         if ( (f%dynamics%ldiag_ke) .and. (mod(n,logfile_outfreq)==0) ) then
             call write_enegry_info(f%dynamics, f%partit, f%mesh)
         end if
